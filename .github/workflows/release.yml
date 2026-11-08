@@ -73,7 +73,7 @@ jobs:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
-      sign-binaries: true
+      sign-binaries: false # no signing secrets yet; see main-build.yml
       asset-prefix: "screamflow"
       upload-artifacts: false
       release-id: ${{ needs.create-release.outputs.release-id }}

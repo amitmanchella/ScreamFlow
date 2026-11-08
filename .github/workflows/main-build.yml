@@ -48,5 +48,7 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       upload-artifacts: true
-      sign-binaries: true
+      # ScreamFlow has no Apple or Tauri signing secrets yet; macOS builds are
+      # ad-hoc signed (tauri.conf.json signingIdentity "-").
+      sign-binaries: false
     secrets: inherit
