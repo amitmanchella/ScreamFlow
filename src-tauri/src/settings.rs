@@ -1,4 +1,3 @@
-use crate::utils;
 use log::{debug, warn};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -10,6 +9,9 @@ use tauri_plugin_store::StoreExt;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
+/// The on-device OpenAI-compatible server provider. Kept as `custom` so the
+/// shared post-processing code that keys off it keeps working.
+pub const LOCAL_PROVIDER_ID: &str = "custom";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
@@ -602,7 +604,7 @@ fn default_autostart_enabled() -> bool {
 }
 
 fn default_update_checks_enabled() -> bool {
-    true
+    false
 }
 
 fn default_show_whats_new_on_update() -> bool {
@@ -716,74 +718,34 @@ fn default_show_tray_icon() -> bool {
 }
 
 fn default_post_process_provider_id() -> String {
-    "openai".to_string()
+    LOCAL_PROVIDER_ID.to_string()
 }
 
+/// Cleanup providers. ScreamFlow is local-only, so every one runs on this
+/// computer: Apple Intelligence where the OS has it, and any OpenAI-compatible
+/// server on localhost (llama.cpp, Ollama, LM Studio, ...). `llm_client`
+/// refuses any base URL that is not loopback. The on-device cleanup model is
+/// still to be chosen; this is the slot it plugs into.
 fn default_post_process_providers() -> Vec<PostProcessProvider> {
-    let mut providers = vec![
-        PostProcessProvider {
-            id: "openai".to_string(),
-            label: "OpenAI".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            allow_base_url_edit: false,
-            models_endpoint: Some("/models".to_string()),
-            supports_structured_output: true,
-            api_format: PostProcessApiFormat::OpenAi,
-        },
-        PostProcessProvider {
-            id: "zai".to_string(),
-            label: "Z.AI".to_string(),
-            base_url: "https://api.z.ai/api/paas/v4".to_string(),
-            allow_base_url_edit: false,
-            models_endpoint: Some("/models".to_string()),
-            supports_structured_output: true,
-            api_format: PostProcessApiFormat::OpenAi,
-        },
-        PostProcessProvider {
-            id: "openrouter".to_string(),
-            label: "OpenRouter".to_string(),
-            base_url: "https://openrouter.ai/api/v1".to_string(),
-            allow_base_url_edit: false,
-            models_endpoint: Some("/models".to_string()),
-            supports_structured_output: true,
-            api_format: PostProcessApiFormat::OpenAi,
-        },
-        PostProcessProvider {
-            id: "anthropic".to_string(),
-            label: "Anthropic".to_string(),
-            base_url: "https://api.anthropic.com/v1".to_string(),
-            allow_base_url_edit: false,
-            models_endpoint: Some("/models".to_string()),
-            supports_structured_output: false,
-            api_format: PostProcessApiFormat::Anthropic,
-        },
-        PostProcessProvider {
-            id: "groq".to_string(),
-            label: "Groq".to_string(),
-            base_url: "https://api.groq.com/openai/v1".to_string(),
-            allow_base_url_edit: false,
-            models_endpoint: Some("/models".to_string()),
-            supports_structured_output: false,
-            api_format: PostProcessApiFormat::OpenAi,
-        },
-        PostProcessProvider {
-            id: "cerebras".to_string(),
-            label: "Cerebras".to_string(),
-            base_url: "https://api.cerebras.ai/v1".to_string(),
-            allow_base_url_edit: false,
-            models_endpoint: Some("/models".to_string()),
-            supports_structured_output: true,
-            api_format: PostProcessApiFormat::OpenAi,
-        },
-    ];
+    #[allow(unused_mut)] // Only macOS on Apple silicon adds a provider.
+    let mut providers = vec![PostProcessProvider {
+        id: LOCAL_PROVIDER_ID.to_string(),
+        label: "Local server".to_string(),
+        base_url: "http://localhost:11434/v1".to_string(),
+        allow_base_url_edit: true,
+        models_endpoint: Some("/models".to_string()),
+        supports_structured_output: false,
+        api_format: PostProcessApiFormat::OpenAi,
+    }];
 
     // Note: We always include Apple Intelligence on macOS ARM64 without checking availability
     // at startup. The availability check is deferred to when the user actually tries to use it
     // (in actions.rs). This prevents crashes on macOS 26.x beta where accessing
     // SystemLanguageModel.default during early app initialization causes SIGABRT.
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        providers.push(PostProcessProvider {
+    providers.insert(
+        0,
+        PostProcessProvider {
             id: APPLE_INTELLIGENCE_PROVIDER_ID.to_string(),
             label: "Apple Intelligence".to_string(),
             base_url: "apple-intelligence://local".to_string(),
@@ -791,30 +753,8 @@ fn default_post_process_providers() -> Vec<PostProcessProvider> {
             models_endpoint: None,
             supports_structured_output: true,
             api_format: PostProcessApiFormat::OpenAi,
-        });
-    }
-
-    // AWS Bedrock via Mantle (OpenAI-compatible endpoint)
-    providers.push(PostProcessProvider {
-        id: "bedrock_mantle".to_string(),
-        label: "AWS Bedrock (Mantle)".to_string(),
-        base_url: "https://bedrock-mantle.us-east-1.api.aws/v1".to_string(),
-        allow_base_url_edit: false,
-        models_endpoint: Some("/models".to_string()),
-        supports_structured_output: true,
-        api_format: PostProcessApiFormat::OpenAi,
-    });
-
-    // Custom provider always comes last
-    providers.push(PostProcessProvider {
-        id: "custom".to_string(),
-        label: "Custom".to_string(),
-        base_url: "http://localhost:11434/v1".to_string(),
-        allow_base_url_edit: true,
-        models_endpoint: Some("/models".to_string()),
-        supports_structured_output: false,
-        api_format: PostProcessApiFormat::OpenAi,
-    });
+        },
+    );
 
     providers
 }
@@ -880,6 +820,17 @@ fn default_typing_tool() -> TypingTool {
 
 fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     let mut changed = false;
+    // Drop providers that are not on-device (e.g. from an imported store).
+    let defaults = default_post_process_providers();
+    let before = settings.post_process_providers.len();
+    settings
+        .post_process_providers
+        .retain(|p| defaults.iter().any(|d| d.id == p.id));
+    changed |= settings.post_process_providers.len() != before;
+    if settings.active_post_process_provider().is_none() {
+        settings.post_process_provider_id = default_post_process_provider_id();
+        changed = true;
+    }
     for provider in default_post_process_providers() {
         // Use match to do a single lookup - either sync existing or add new
         match settings
@@ -1381,13 +1332,12 @@ fn os_languages() -> &'static [String] {
     }
 }
 
-/// Update checks are forced off (without touching the persisted setting) when
-/// `HANDY_DISABLE_UPDATER` is set — e.g. by the Nix package, since self-update
-/// can't work against an immutable /nix/store install.
+/// Update checks are forced off without touching the persisted setting.
 pub fn update_checks_forced_disabled() -> bool {
-    use std::sync::OnceLock;
-    static IS_UPDATER_DISABLED: OnceLock<bool> = OnceLock::new();
-    *IS_UPDATER_DISABLED.get_or_init(|| utils::env_flag_enabled("HANDY_DISABLE_UPDATER"))
+    // ScreamFlow has no signed release feed yet (the updater pubkey in
+    // tauri.conf.json is still Handy's), so it never checks for updates and
+    // makes no network calls on its own. Re-enable once releases are signed.
+    true
 }
 
 /// Effective updater state: the user's stored preference, overridden to `false`
@@ -2009,22 +1959,40 @@ mod tests {
     }
 
     #[test]
-    fn post_process_defaults_sync_builtin_api_format_but_keep_custom() {
+    fn post_process_defaults_drop_remote_providers_and_keep_custom_format() {
         let mut settings = get_default_settings();
-        for provider in settings.post_process_providers.iter_mut() {
-            match provider.id.as_str() {
-                // Settings saved before the built-in provider moved to Messages
-                "anthropic" => provider.api_format = PostProcessApiFormat::OpenAi,
-                "custom" => provider.api_format = PostProcessApiFormat::Anthropic,
-                _ => {}
-            }
-        }
+        let mut remote = settings.post_process_provider("custom").unwrap().clone();
+        remote.id = "openai".to_string();
+        remote.base_url = "https://api.openai.com/v1".to_string();
+        settings.post_process_providers.push(remote);
+        settings.post_process_provider_id = "openai".to_string();
+        settings
+            .post_process_provider_mut("custom")
+            .unwrap()
+            .api_format = PostProcessApiFormat::Anthropic;
 
         assert!(ensure_post_process_defaults(&mut settings));
 
-        let format_of = |id: &str| settings.post_process_provider(id).unwrap().api_format;
-        assert_eq!(format_of("anthropic"), PostProcessApiFormat::Anthropic);
-        assert_eq!(format_of("custom"), PostProcessApiFormat::Anthropic);
+        assert!(settings.post_process_provider("openai").is_none());
+        assert_eq!(settings.post_process_provider_id, "custom");
+        assert_eq!(
+            settings.post_process_provider("custom").unwrap().api_format,
+            PostProcessApiFormat::Anthropic
+        );
+    }
+
+    #[test]
+    fn fresh_settings_keep_cleanup_on_device_and_off() {
+        let settings = get_default_settings();
+        assert!(!settings.post_process_enabled);
+        for provider in &settings.post_process_providers {
+            assert!(
+                provider.id == APPLE_INTELLIGENCE_PROVIDER_ID
+                    || crate::llm_client::is_local_base_url(&provider.base_url),
+                "{} is not on-device",
+                provider.id
+            );
+        }
     }
 
     #[test]

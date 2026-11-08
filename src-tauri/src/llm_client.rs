@@ -1,6 +1,6 @@
 use crate::settings::{PostProcessApiFormat, PostProcessProvider};
 use log::{debug, error, info};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, REFERER, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -185,15 +185,7 @@ fn build_headers(provider: &PostProcessProvider, api_key: &str) -> Result<Header
 
     // Common headers
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        REFERER,
-        HeaderValue::from_static("https://github.com/cjpais/Handy"),
-    );
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static("Handy/1.0 (+https://github.com/cjpais/Handy)"),
-    );
-    headers.insert("X-Title", HeaderValue::from_static("Handy"));
+    headers.insert(USER_AGENT, HeaderValue::from_static("ScreamFlow"));
 
     // Provider-specific auth headers
     if !api_key.is_empty() {
@@ -245,13 +237,38 @@ fn shared_client() -> Result<&'static reqwest::Client, String> {
         .pool_idle_timeout(Duration::from_secs(30))
         .tcp_keepalive(Duration::from_secs(15))
         .connect_timeout(Duration::from_secs(10))
+        // A local server must not hand the text on to another host.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| report_reqwest_error("Failed to build HTTP client", &e))?;
     Ok(SHARED.get_or_init(|| client))
 }
 
-/// Create an HTTP client with provider-specific headers
+/// Whether `base_url` points at this machine. ScreamFlow is local-only:
+/// dictated text may only go to a server on the same computer.
+pub fn is_local_base_url(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url.trim()) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Create an HTTP client with provider-specific headers. Every request goes
+/// through here, so this is where a non-local endpoint is refused.
 fn create_client(provider: &PostProcessProvider, api_key: &str) -> Result<ProviderClient, String> {
+    if !is_local_base_url(&provider.base_url) {
+        return Err(format!(
+            "ScreamFlow only sends text to servers on this computer; '{}' is not local",
+            sanitized_url_for_log(&provider.base_url)
+        ));
+    }
     Ok(ProviderClient {
         client: shared_client()?,
         headers: build_headers(provider, api_key)?,
@@ -760,6 +777,39 @@ mod tests {
         });
 
         format!("http://{address}")
+    }
+
+    #[test]
+    fn only_loopback_endpoints_count_as_local() {
+        for url in [
+            "http://localhost:11434/v1",
+            "http://LOCALHOST:8080",
+            "http://127.0.0.1:1234/v1",
+            "http://127.8.9.10/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            assert!(is_local_base_url(url), "{url} should be local");
+        }
+        for url in [
+            "https://api.openai.com/v1",
+            "http://localhost.evil.example/v1",
+            "http://127.0.0.1.nip.io/v1",
+            "http://192.168.1.20:11434/v1",
+            "http://[::ffff:8.8.8.8]/v1",
+            "not a url",
+            "",
+        ] {
+            assert!(!is_local_base_url(url), "{url} should not be local");
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_endpoints_are_refused_before_any_request() {
+        let remote = provider("custom", "https://api.openai.com/v1");
+        let err = send_chat_completion(&remote, String::new(), "m", "hi".into(), false)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not local"), "{err}");
     }
 
     #[test]

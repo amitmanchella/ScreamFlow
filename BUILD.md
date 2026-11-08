@@ -1,6 +1,6 @@
 # Build Instructions
 
-This guide covers how to set up the development environment and build Handy from source across different platforms.
+This guide covers how to set up the development environment and build ScreamFlow from source across different platforms.
 
 ## Prerequisites
 
@@ -77,8 +77,8 @@ This guide covers how to set up the development environment and build Handy from
 ### 1. Clone the Repository
 
 ```bash
-git clone git@github.com:cjpais/Handy.git
-cd Handy
+git clone git@github.com:amitmanchella/screamflow.git
+cd screamflow
 ```
 
 ### 2. Install Dependencies
@@ -103,28 +103,28 @@ This compiles a release binary and generates platform-specific bundles (deb, rpm
 
 ## Linux Install (from source)
 
-The raw binary (`src-tauri/target/release/handy`) cannot run standalone — it needs Tauri resource files (tray icons, sounds, VAD model) to be co-located at the expected path.
+The raw binary (`src-tauri/target/release/screamflow`) cannot run standalone — it needs Tauri resource files (tray icons, sounds, VAD model) to be co-located at the expected path.
 
 **Install from the deb bundle** (works on any Linux distro):
 
 ```bash
 cd /tmp
-ar x /path/to/Handy/src-tauri/target/release/bundle/deb/Handy_*_amd64.deb data.tar.gz
+ar x /path/to/screamflow/src-tauri/target/release/bundle/deb/ScreamFlow_*_amd64.deb data.tar.gz
 tar xzf data.tar.gz
-sudo cp usr/bin/handy /usr/bin/
+sudo cp usr/bin/screamflow /usr/bin/
 sudo cp -a usr/lib/. /usr/lib/
 sudo cp -r usr/share/icons/hicolor/* /usr/share/icons/hicolor/
-sudo cp usr/share/applications/Handy.desktop /usr/share/applications/
+sudo cp usr/share/applications/ScreamFlow.desktop /usr/share/applications/
 ```
 
-The runtime libraries live in the app-private `/usr/lib/Handy/` (on the binary's rpath), so no `ldconfig` step is needed.
+The runtime libraries live in the app-private `/usr/lib/ScreamFlow/` (on the binary's rpath), so no `ldconfig` step is needed.
 
 After subsequent rebuilds, copy the binary and any refreshed runtime libraries:
 
 ```bash
-sudo cp src-tauri/target/release/handy /usr/bin/
-sudo mkdir -p /usr/lib/Handy
-sudo cp -a src-tauri/transcribe-libs/. /usr/lib/Handy/
+sudo cp src-tauri/target/release/screamflow /usr/bin/
+sudo mkdir -p /usr/lib/ScreamFlow
+sudo cp -a src-tauri/transcribe-libs/. /usr/lib/ScreamFlow/
 ```
 
 Resources only need re-copying if they change upstream (new icons, sounds, models, etc.).
@@ -135,15 +135,15 @@ Resources only need re-copying if they change upstream (new icons, sounds, model
 
 Local builds use the ad-hoc `signingIdentity: "-"`. A rebuild can have a new macOS code
 identity while the old **System Settings > Privacy & Security > Accessibility** entry
-remains visibly enabled, leaving Handy on `Waiting...`.
+remains visibly enabled, leaving ScreamFlow on `Waiting...`.
 
-After installing the final bundle at `/Applications/Handy.app`, quit Handy, clear only its
+After installing the final bundle at `/Applications/ScreamFlow.app`, quit ScreamFlow, clear only its
 stale Accessibility record, then reopen it:
 
 ```bash
-osascript -e 'tell application id "com.pais.handy" to quit' || true
-tccutil reset Accessibility com.pais.handy
-open /Applications/Handy.app
+osascript -e 'tell application id "io.github.amitmanchella.screamflow" to quit' || true
+tccutil reset Accessibility io.github.amitmanchella.screamflow
+open /Applications/ScreamFlow.app
 ```
 
 Grant Accessibility again when prompted. This does not reset Microphone or other TCC
@@ -153,14 +153,14 @@ For optional diagnosis, compare the designated requirements of the previous and 
 bundles:
 
 ```bash
-codesign -dr - /path/to/previous/Handy.app 2>&1
-codesign -dr - /Applications/Handy.app 2>&1
+codesign -dr - /path/to/previous/ScreamFlow.app 2>&1
+codesign -dr - /Applications/ScreamFlow.app 2>&1
 ```
 
 An ad-hoc requirement contains a `cdhash`; a changed requirement confirms the rebuild is
 not covered by the old grant. The reset procedure does not require this check.
 
-See [issue #1618](https://github.com/cjpais/Handy/issues/1618) for the related onboarding
+See [issue #1618](https://github.com/cjpais/ScreamFlow/issues/1618) for the related onboarding
 and stale-permission report.
 
 ### AppImage build fails on Arch / rolling-release distros
@@ -170,7 +170,7 @@ and stale-permission report.
 The error from Tauri:
 
 ```
-Bundling Handy_*_amd64.AppImage
+Bundling ScreamFlow_*_amd64.AppImage
 failed to bundle project `failed to run linuxdeploy`
 ```
 
@@ -179,7 +179,7 @@ Tauri swallows the real linuxdeploy error. To see it, run linuxdeploy manually:
 ```bash
 cd src-tauri/target/release/bundle/appimage
 ~/.cache/tauri/linuxdeploy-x86_64.AppImage --appimage-extract-and-run \
-  --appdir Handy.AppDir --plugin gtk --output appimage
+  --appdir ScreamFlow.AppDir --plugin gtk --output appimage
 ```
 
 **Workaround:** The binary, deb, and rpm bundles all build fine — only the AppImage step fails. To skip it:
@@ -234,7 +234,7 @@ around either case with a short Cargo target directory:
 $env:CARGO_TARGET_DIR = "C:\h"
 
 # Or persist it for all future terminals (note: redirects ALL your
-# Rust projects' build output, not just Handy):
+# Rust projects' build output, not just ScreamFlow):
 [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', 'C:\h', 'User')
 ```
 
@@ -245,11 +245,11 @@ and `bun run tauri build` work normally.
 
 ### Windows `tauri build` fails at bundling with `program not found`
 
-If the build compiles all the way to `Built application at: ...\handy.exe` and
+If the build compiles all the way to `Built application at: ...\screamflow.exe` and
 then fails with:
 
 ```
-Signing C:\...\handy.exe with a custom signing command
+Signing C:\...\screamflow.exe with a custom signing command
 failed to bundle project `program not found`
 ```
 
